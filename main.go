@@ -11,12 +11,46 @@ type Header struct {
 	byteOrder byte
 	magic     [2]byte
 	version   byte
-	size      [2]byte
-	length    [2]byte
 }
 
 type Maze struct {
-	data []byte
+	data   [][]bool
+	startx int
+	starty int
+	items  []item
+}
+
+type item interface {
+	location() (int, int)
+	symbol() byte
+}
+
+type goal struct {
+	x, y     int
+	required bool
+}
+
+type warp struct {
+	x, y, destx, desty int
+}
+
+func (g goal) location() (int, int) {
+	return g.x, g.y
+}
+
+func (g goal) symbol() byte {
+	if g.required {
+		return 'x'
+	}
+	return 'o'
+}
+
+func (w warp) location() (int, int) {
+	return w.x, w.y
+}
+
+func (w warp) symbol() byte {
+	return 'w'
 }
 
 func sliceEquals(x, y []byte) bool {
@@ -45,11 +79,10 @@ func (m *Maze) UnmarshalBinary(data []byte) error {
 		return errors.New("Unsupported version")
 	}
 
-	// width := data[4]
-	// heigth := data[5]
+	width := int(data[4])
+	height := int(data[5])
 
 	var length uint16
-
 	fmt.Println(data[6:8])
 
 	if byteOrder == 1 {
@@ -61,9 +94,65 @@ func (m *Maze) UnmarshalBinary(data []byte) error {
 		fmt.Println("Using big endian, data is ", length, " bytes long")
 	}
 
+	c := make(chan bool, 10)
+
+	go func() {
+		m.data = make([][]bool, height)
+
+		for i := 0; i < height; i++ {
+			m.data[i] = make([]bool, width)
+			for j := 0; j < width; j++ {
+				m.data[i][j] = <-c
+			}
+		}
+	}()
+
+	for _, v := range data[8 : 8+length] {
+		fmt.Printf("%b\n", v)
+		for i := uint(0); i < 8; i++ {
+			c <- v&(128>>i) > 0
+			fmt.Println(v&(128>>i) > 0)
+		}
+	}
+
+	data = data[8+length:]
+
+	m.startx = int(data[0])
+	m.starty = int(data[1])
+
+	itemCount := int(data[2])
+
+	m.items = make([]item, itemCount)
+	cursor := 3
+
+	for index := 0; index < itemCount; index++ {
+		t := data[cursor]
+
+		switch t {
+		case 0:
+			// required goal
+			m.items[index] = goal{x: int(data[t+1]), y: int(data[t+2]), required: true}
+			fmt.Println("Required goal")
+			cursor += 3
+		case 1:
+			// optional goal
+			m.items[index] = goal{x: int(data[t+1]), y: int(data[t+2]), required: false}
+			cursor += 3
+		case 2:
+			// warp
+			m.items[index] = warp{
+				x:     int(data[t+1]),
+				y:     int(data[t+2]),
+				destx: int(data[t+3]),
+				desty: int(data[t+4]),
+			}
+			cursor += 5
+		}
+
+	}
+
 	return nil
 
-	// version :=
 }
 
 func main() {
@@ -76,5 +165,5 @@ func main() {
 	m := Maze{}
 	m.UnmarshalBinary(data)
 
-	fmt.Println()
+	fmt.Println(m)
 }
